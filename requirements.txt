@@ -1,0 +1,41 @@
+# ============================================================
+# TripWeaver — Python 3.12
+# Install with:  uv pip install -r requirements.txt
+# ============================================================
+
+# ---- Core web framework ----
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+
+# ---- Config & validation ----
+pydantic>=2.10.0
+pydantic-settings>=2.7.0
+python-dotenv>=1.0.1
+
+# ---- HTTP client (used by app/tools/) ----
+httpx>=0.28.0
+
+# ---- Agent orchestration (Step 8) ----
+langgraph>=0.2.62
+langchain-core>=0.3.28
+
+# ---- LLM provider (Step 5) ----
+openai>=1.59.0
+
+# ---- Database / ORM (Step 12) ----
+sqlalchemy>=2.0.36
+
+# ---- Utilities ----
+python-dateutil>=2.9.0.post0
+tenacity>=9.0.0
+
+# ---- Testing (Step 15) ----
+pytest>=8.3.0
+pytest-asyncio>=0.25.0
+respx>=0.22.0
+
+# ---- Frontend (Step 13) ----
+streamlit>=1.41.0
+
+#---- PDF generation (Step 14) ----
+uv pip install fpdf2
