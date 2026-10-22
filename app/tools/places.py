@@ -42,16 +42,31 @@ async def search_activities(destination: str, interests: list[str]) -> list[dict
         places_data = await fetch_json(places_url)
 
         activities = []
+        seen_names = set()
+
         for place in places_data.get("features", []):
             props = place["properties"]
             name = props.get("name", "Unknown Attraction")
+
+            # FIX: Skip if name is empty, "Unknown Attraction", or a duplicate
+            if not name or name.lower() == "unknown attraction" or name in seen_names:
+                continue
+            seen_names.add(name)
+
+            # Dynamic Cost Estimation
+            cost = 10.0
+            lower_name = name.lower()
+            if any(w in lower_name for w in ["museum", "palace", "tower", "park"]):
+                cost = 25.0
+            elif any(w in lower_name for w in ["mosque", "street", "walk", "beach"]):
+                cost = 0.0
 
             activities.append(
                 {
                     "name": name,
                     "category": "attraction",
                     "estimated_duration_hours": 2.0,
-                    "cost": 10.0,  # Estimated
+                    "cost": cost,
                     "currency": "USD",
                     "address": props.get("formatted", ""),
                     "source": "Geoapify",

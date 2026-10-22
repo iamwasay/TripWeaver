@@ -47,10 +47,5 @@ async def get_exchange_rate(from_currency: str, to_currency: str) -> dict:
 
     except Exception as e:
         logger.error(f"Failed to fetch exchange rate: {str(e)}")
-        # Fallback to 1.0 so the app doesn't crash (though budget will be inaccurate)
-        return {
-            "rate": 1.0,
-            "source": "fallback_error",
-            "retrieved_at": datetime.utcnow(),
-            "error": str(e),
-        }
+        # FIX: Raise an error instead of returning 1.0, so we don't fake the budget
+        raise ValueError(f"Currency conversion failed: {str(e)}")

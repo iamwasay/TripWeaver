@@ -7,23 +7,24 @@ settings = get_settings()
 
 
 async def get_flights(
-    origin: str, destination: str, date: str, adults: int
+    origin: str, destination: str, depart_date: str, return_date: str, adults: int
 ) -> list[dict]:
     if not settings.serpapi_api_key:
         logger.warning("No SERPAPI_API_KEY found. Using mock flight data.")
-        return _get_mock_flights(origin, destination, adults, date)
+        return _get_mock_flights(origin, destination, adults, depart_date)
 
-    logger.info(f"Fetching real flights via SerpApi: {origin} -> {destination}")
+    logger.info(
+        f"Fetching real flights via SerpApi: {origin} -> {destination} (Round Trip)"
+    )
     try:
-        # Note: SerpApi Google Flights works best with IATA codes (e.g., ISB, IST).
-        # If the user types a city name, it might fail and fall back to mock.
         url = "https://serpapi.com/search.json"
         params = {
             "engine": "google_flights",
             "departure_id": origin,
             "arrival_id": destination,
-            "outbound_date": date,
-            "type": "2",  # One-way
+            "outbound_date": depart_date,
+            "return_date": return_date,  # Added return date
+            "type": "1",  # 1 = Round trip
             "currency": "USD",
             "adults": adults,
             "api_key": settings.serpapi_api_key,
@@ -32,8 +33,7 @@ async def get_flights(
         data = await fetch_json(url, params=params)
 
         flights = []
-        # SerpApi returns "best_flights" and "other_flights"
-        for flight_group in data.get("best_flights", [])[:3]:  # Get top 3
+        for flight_group in data.get("best_flights", [])[:3]:
             first_leg = flight_group["flights"][0]
             last_leg = flight_group["flights"][-1]
 
@@ -42,6 +42,8 @@ async def get_flights(
                     "airline": first_leg["airline"],
                     "departure_time": first_leg["departure_airport"]["time"],
                     "arrival_time": last_leg["arrival_airport"]["time"],
+                    "duration_minutes": flight_group.get("total_duration", 0),
+                    "stops": len(flight_group["flights"]) - 1,
                     "price": float(flight_group["price"]),
                     "currency": "USD",
                     "source": "Google Flights (SerpApi)",
@@ -50,13 +52,13 @@ async def get_flights(
             )
 
         if not flights:
-            logger.warning("No real flights found for these dates. Using mock.")
-            return _get_mock_flights(origin, destination, adults, date)
+            logger.warning("No real flights found. Using mock.")
+            return _get_mock_flights(origin, destination, adults, depart_date)
 
         return flights
     except Exception as e:
         logger.error(f"SerpApi failed: {str(e)}. Falling back to mock.")
-        return _get_mock_flights(origin, destination, adults, date)
+        return _get_mock_flights(origin, destination, adults, depart_date)
 
 
 def _get_mock_flights(
@@ -67,6 +69,8 @@ def _get_mock_flights(
             "airline": "Emirates (Mock)",
             "departure_time": f"{date}T03:00:00",
             "arrival_time": f"{date}T11:00:00",
+            "duration_minutes": 480,
+            "stops": 1,
             "price": 450.0 * adults,
             "currency": "USD",
             "source": "Mock Data",
