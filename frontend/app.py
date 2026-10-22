@@ -3,7 +3,7 @@ import html
 import requests
 import streamlit as st
 from datetime import date, timedelta
-from fpdf import FPDF
+from pdf_report import generate_pdf
 
 # Requires Streamlit >= 1.40 (icon= on buttons and Material icons in markdown)
 
@@ -64,7 +64,6 @@ THEMES = {
 }
 
 # -------------------- Placeholder content for the landing page --------------------
-# Sample values only. Replace with real data when you have it.
 POPULAR_TRIPS = [
     ("Dubai", "DXB", "5 nights", "320,000"),
     ("Istanbul", "IST", "5 nights", "290,000"),
@@ -312,60 +311,6 @@ def load_airports():
         except Exception:
             ss["airport_list"] = FALLBACK_AIRPORTS
     return ss["airport_list"]
-
-
-# -------------------- PDF GENERATOR --------------------
-def generate_pdf(data):
-    pdf = FPDF()
-    pdf.add_page()
-
-    pdf.set_font("helvetica", "B", 24)
-    pdf.set_text_color(15, 23, 42)
-    pdf.cell(0, 15, "TripWeaver: Travel Plan", ln=True, align="C")
-
-    pdf.set_font("helvetica", "", 12)
-    pdf.set_text_color(100, 116, 139)
-    dest = data["trip_request"]["destination"]
-    dates = (
-        f"{data['trip_request']['start_date']} to {data['trip_request']['end_date']}"
-    )
-    pdf.cell(
-        0,
-        10,
-        f"Destination: {dest}  |  Dates: {dates}  |  Travelers: {data['trip_request']['travelers']}",
-        ln=True,
-        align="C",
-    )
-    pdf.ln(10)
-
-    pdf.set_font("helvetica", "B", 16)
-    pdf.set_text_color(15, 23, 42)
-    pdf.cell(0, 10, "Budget Breakdown", ln=True)
-    pdf.set_font("helvetica", "", 12)
-    budget = data["budget"]
-    pdf.cell(0, 8, f"Total Estimated: PKR {budget['grand_total']:,.2f}", ln=True)
-    pdf.cell(0, 8, f"Remaining Budget: PKR {budget['remaining_budget']:,.2f}", ln=True)
-    pdf.ln(10)
-
-    pdf.set_font("helvetica", "B", 16)
-    pdf.cell(0, 10, "Day-by-Day Plan", ln=True)
-
-    for day in [d for d in data["itinerary"]["days"] if d.get("activities")]:
-        pdf.set_font("helvetica", "B", 12)
-        pdf.set_text_color(30, 58, 138)
-        pdf.cell(0, 8, f"Day {day['day_number']} - {day['date']}", ln=True)
-        pdf.set_font("helvetica", "", 11)
-        pdf.set_text_color(0, 0, 0)
-        for act in day.get("activities", []):
-            pdf.cell(
-                0,
-                6,
-                f"  - {act['name']} ({act['estimated_duration_hours']} hours)",
-                ln=True,
-            )
-        pdf.ln(4)
-
-    return bytes(pdf.output())
 
 
 # -------------------- Card builders (return HTML strings) --------------------
@@ -665,13 +610,22 @@ def render_results():
             html_block(
                 f'<div class="status warn">{icon("alert", 20, "#DC2626")} <span><strong>Budget alert:</strong> {issue}</span></div>'
             )
-        st.download_button(
-            label="Download PDF plan",
-            data=generate_pdf(result),
-            file_name=f"TripWeaver_{req['origin']}_{req['destination']}.pdf",
-            mime="application/pdf",
-            icon=":material/download:",
-        )
+
+        try:
+            pdf_bytes = generate_pdf(result, req)
+        except Exception:
+            pdf_bytes = None
+
+        if pdf_bytes:
+            st.download_button(
+                label="Download PDF plan",
+                data=pdf_bytes,
+                file_name=f"TripWeaver_{req['origin']}_{req['destination']}.pdf",
+                mime="application/pdf",
+                icon=":material/download:",
+            )
+        else:
+            st.caption("PDF is unavailable for this plan.")
 
     with right:
         scale = max(total_budget, grand_total) or 1
