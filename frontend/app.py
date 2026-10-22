@@ -1,11 +1,9 @@
 import os
 import html
-import requests
 import streamlit as st
 from datetime import date, timedelta
 from pdf_report import generate_pdf
-
-# Requires Streamlit >= 1.40 (icon= on buttons and Material icons in markdown)
+from backend_client import fetch_airports, post_plan
 
 # -------------------- Configuration --------------------
 API_BASE_URL = os.getenv(
@@ -26,7 +24,7 @@ ss = st.session_state
 ss.setdefault("result", None)
 ss.setdefault("req", {})
 
-# -------------------- Icon set (one consistent line-icon family) --------------------
+# -------------------- Icon set --------------------
 ICON_PATHS = {
     "plane": '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>',
     "bed": '<path d="M2 20v-8a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v8"/><path d="M4 10V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4"/><path d="M12 4v6"/><path d="M2 18h20"/>',
@@ -54,7 +52,6 @@ def icon(name, size=18, color="currentColor", fill=False):
     )
 
 
-# Section themes: (icon color, tinted background)
 THEMES = {
     "flights": ("#2563EB", "#DBEAFE"),
     "hotels": ("#7C3AED", "#EDE9FE"),
@@ -63,7 +60,6 @@ THEMES = {
     "budget": ("#0F172A", "#E2E8F0"),
 }
 
-# -------------------- Placeholder content for the landing page --------------------
 POPULAR_TRIPS = [
     ("Dubai", "DXB", "5 nights", "320,000"),
     ("Istanbul", "IST", "5 nights", "290,000"),
@@ -95,7 +91,6 @@ st.markdown(
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .stApp { background-color: #F8FAFC; }
 
-/* --- STREAMLIT RESET (flush to top, full width) --- */
 #MainMenu, footer, header, [data-testid="stHeader"], [data-testid="stDecoration"], [data-testid="stToolbar"] { display: none !important; }
 [data-testid="stAppViewContainer"], [data-testid="stMain"] { overflow-x: hidden; padding-top: 0 !important; }
 .block-container, [data-testid="stMainBlockContainer"] {
@@ -104,7 +99,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     margin: 0 auto;
 }
 
-/* --- FULL-BLEED HERO --- */
 .hero-wrapper {
     width: 100vw; margin-left: calc(50% - 50vw); margin-bottom: -64px;
     padding: 24px 20px 92px 20px; text-align: center; color: white;
@@ -124,7 +118,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .animated-plane { animation: float 4s ease-in-out infinite; display: inline-flex; }
 @media (prefers-reduced-motion: reduce) { .animated-plane { animation: none; } }
 
-/* --- SEARCH FORM (centered card overlapping the hero) --- */
 [data-testid="stForm"] {
     background-color: white; padding: 22px 28px 24px 28px; border-radius: 20px; border: none;
     box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
@@ -142,7 +135,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 }
 .stFormSubmitButton > button:hover, [data-testid="stFormSubmitButton"] > button:hover { background-color: #1E3A8A; color: #fff; box-shadow: 0 8px 20px rgba(30,58,138,0.3); }
 
-/* --- SHARED --- */
 .band, .results { max-width: 1200px; margin: 40px auto 0 auto; }
 .band-title { font-size: 1.3rem; font-weight: 800; color: #0F172A; margin-bottom: 4px; }
 .band-sub { font-size: 0.9rem; color: #64748B; margin-bottom: 16px; }
@@ -152,10 +144,8 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .mini-text { font-size: 0.88rem; color: #64748B; margin-top: 4px; }
 .mini-meta { font-size: 0.8rem; color: #64748B; margin-top: 2px; }
 .mini-price { font-size: 1rem; font-weight: 700; color: #1E3A8A; margin-top: 10px; }
-
 .icon-badge { display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; flex-shrink: 0; }
 
-/* --- RESULTS: SUMMARY BAR --- */
 .bar { display: flex; align-items: center; gap: 10px 20px; flex-wrap: wrap; background: #fff; border: 1px solid #E2E8F0; border-radius: 14px; padding: 14px 20px; margin: 36px 0 18px 0; }
 .bar-route { display: inline-flex; align-items: center; gap: 10px; font-size: 1.1rem; font-weight: 800; color: #0F172A; }
 .bar-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 0.92rem; color: #475569; }
@@ -165,7 +155,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .bar-stat .v { font-size: 1.15rem; font-weight: 800; color: #0F172A; white-space: nowrap; }
 .chip { display: inline-block; background: #EEF2FF; color: #3730A3; padding: 3px 10px; border-radius: 12px; font-size: 0.78rem; font-weight: 600; margin: 2px 4px 2px 0; }
 
-/* --- RESULTS: BUDGET PANEL --- */
 .panel { background: #fff; border: 1px solid #E2E8F0; border-radius: 16px; padding: 18px 20px; }
 .panel-head { display: flex; align-items: center; gap: 10px; font-size: 1rem; font-weight: 700; color: #0F172A; margin-bottom: 12px; }
 .kv { display: flex; justify-content: space-between; font-size: 0.9rem; color: #334155; padding: 4px 0; }
@@ -178,7 +167,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .remaining { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; border-top: 1px solid #E2E8F0; margin-top: 10px; padding-top: 10px; font-weight: 700; color: #0F172A; }
 .remaining .amount { font-size: 1.3rem; white-space: nowrap; }
 
-/* --- RESULTS: RECOMMENDED COMBO + STATUS --- */
 .combo { background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 100%); color: #fff; border-radius: 16px; padding: 20px 24px; margin-bottom: 14px; }
 .combo-tag { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 700; color: #93C5FD; margin-bottom: 10px; }
 .combo-body { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 1.1rem; font-weight: 700; }
@@ -189,7 +177,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .status.ok { background: #D1FAE5; color: #065F46; }
 .status.warn { background: #FEE2E2; color: #991B1B; }
 
-/* --- RESULTS: SECTIONS --- */
 .sec-head { display: flex; align-items: center; gap: 14px; margin: 8px 0 14px 0; }
 .sec-head .icon-badge { width: 44px; height: 44px; }
 .sec-title { font-size: 1.25rem; font-weight: 800; color: #0F172A; line-height: 1.2; }
@@ -199,7 +186,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
 .cards-grid.tight { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 
-/* --- CARDS --- */
 .result-card { background: #FFFFFF; border-radius: 16px; padding: 20px 22px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03); border: 1px solid #F1F5F9; transition: box-shadow 0.2s ease, border-color 0.2s ease; }
 .result-card:hover { box-shadow: 0 12px 25px rgba(0, 0, 0, 0.08); border-color: #CBD5E1; }
 .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
@@ -220,7 +206,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .stat-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; color: #334155; margin-top: 8px; }
 .stat-row .inline { display: inline-flex; align-items: center; gap: 6px; }
 
-/* --- ACTIVITY CARDS --- */
 .act-card { display: flex; align-items: center; gap: 14px; background: #fff; border: 1px solid #F1F5F9; border-radius: 16px; padding: 14px 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); }
 .act-card .icon-badge { width: 40px; height: 40px; }
 .act-body { flex-grow: 1; min-width: 0; }
@@ -228,7 +213,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .act-meta { display: flex; align-items: center; gap: 12px; font-size: 0.83rem; color: #64748B; margin-top: 3px; }
 .act-meta .inline { display: inline-flex; align-items: center; gap: 4px; }
 
-/* --- DAY CARDS --- */
 .day-card { background: #fff; border: 1px solid #E2E8F0; border-radius: 16px; padding: 16px 18px; }
 .day-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .day-num { font-size: 1rem; font-weight: 800; color: #0F172A; }
@@ -238,7 +222,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .timeline-activity .m { font-size: 0.8rem; color: #64748B; margin: 2px 0 0 24px; }
 .timeline-activity.free { color: #94A3B8; font-style: italic; }
 
-/* --- LANDING SAMPLE TIMELINE --- */
 .timeline { border-left: 3px solid #E2E8F0; padding-left: 20px; margin-left: 10px; }
 .timeline-item { position: relative; margin-bottom: 22px; }
 .timeline-dot { position: absolute; left: -29px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: #1E3A8A; border: 3px solid #FFFFFF; box-shadow: 0 0 0 2px #1E3A8A; }
@@ -251,7 +234,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
 # -------------------- Helpers --------------------
 def html_block(s):
-    """Render an HTML string. Lines are joined so Streamlit never mistakes indented HTML for a code block."""
     st.markdown(
         "".join(line.strip() for line in s.strip().splitlines()), unsafe_allow_html=True
     )
@@ -304,16 +286,20 @@ def section_header(name, theme, title, count, sub):
 
 
 def load_airports():
-    if "airport_list" not in ss:
-        try:
-            res = requests.get(AIRPORTS_URL, timeout=5)
-            ss["airport_list"] = res.json() if res.ok else FALLBACK_AIRPORTS
-        except Exception:
-            ss["airport_list"] = FALLBACK_AIRPORTS
-    return ss["airport_list"]
+    if ss.get("airport_list"):
+        return ss["airport_list"]
+    with st.spinner("Waking up the server. The first visit can take up to a minute..."):
+        airports = fetch_airports(AIRPORTS_URL)
+    if airports:
+        ss["airport_list"] = airports
+        return airports
+    st.warning(
+        "Could not reach the server. Showing a short airport list; refresh to try again."
+    )
+    return FALLBACK_AIRPORTS
 
 
-# -------------------- Card builders (return HTML strings) --------------------
+# -------------------- Card builders --------------------
 def flight_card(f, is_best, o_code, d_code):
     best = (
         f'<span class="badge-best">{icon("star", 12, "#2563EB", fill=True)} Best value</span>'
@@ -376,7 +362,6 @@ def day_card(day):
 # -------------------- Search form --------------------
 def render_search():
     req = ss.get("req", {})
-    airports = load_airports()
 
     html_block(
         f"""
@@ -390,6 +375,9 @@ def render_search():
 </div>
 """
     )
+
+    # Moving load_airports AFTER the hero block so the hero renders instantly
+    airports = load_airports()
 
     def idx(label, fallback):
         return airports.index(label) if label in airports else fallback
@@ -429,6 +417,7 @@ def render_search():
         budget = c8.number_input(
             "BUDGET (PKR)", min_value=10000, value=req.get("budget", 350000), step=10000
         )
+
         with c9:
             submitted = st.form_submit_button("Search trips", icon=":material/search:")
 
@@ -463,9 +452,7 @@ def render_search():
             ":material/account_balance_wallet: Budget Agent: checking costs against your budget"
         )
         try:
-            response = requests.post(PLAN_URL, json=payload, timeout=180)
-            response.raise_for_status()
-            data = response.json()
+            data = post_plan(PLAN_URL, payload)
             status.update(label="Your plan is ready", state="complete", expanded=False)
         except Exception as e:
             status.update(label="Something went wrong", state="error")
@@ -487,7 +474,7 @@ def render_search():
         }
 
 
-# -------------------- Landing content (only before the first search) --------------------
+# -------------------- Landing content --------------------
 def render_landing_bands():
     trips = "".join(
         f'<div class="mini-card"><div class="mini-title">{c}</div><div class="mini-meta">{code} · {n}</div><div class="mini-price">From PKR {p}</div></div>'
@@ -515,7 +502,7 @@ def render_landing_bands():
     )
 
 
-# -------------------- Results (rendered directly under the search form) --------------------
+# -------------------- Results --------------------
 def render_results():
     req = ss["req"]
     result = ss["result"]
@@ -560,7 +547,6 @@ def render_results():
     rem_color = "#EF4444" if remaining < 0 else "#10B981"
     fits = validation.get("status") != "FAIL"
 
-    # ---- Summary bar ----
     chips = "".join(
         f'<span class="chip">{html.escape(i)}</span>' for i in req["interests"]
     )
@@ -580,7 +566,6 @@ def render_results():
 """
     )
 
-    # ---- Overview: recommendation + budget ----
     left, right = st.columns([1.6, 1], gap="large")
     with left:
         if flights or stays:
@@ -647,7 +632,6 @@ def render_results():
 """
         )
 
-    # ---- Flights ----
     html_block('<div class="sec-divider"></div>')
     h, s = st.columns([3, 1], vertical_alignment="center")
     with h:
@@ -680,7 +664,6 @@ def render_results():
     else:
         st.info("No flights found.")
 
-    # ---- Hotels ----
     html_block('<div class="sec-divider"></div>')
     h, s = st.columns([3, 1], vertical_alignment="center")
     with h:
@@ -711,7 +694,6 @@ def render_results():
     else:
         st.info("No hotels found.")
 
-    # ---- Day-by-day plan (only days that have activities) ----
     html_block('<div class="sec-divider"></div>')
     planned_days = [d for d in days if d.get("activities")]
     html_block(
