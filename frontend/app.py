@@ -8,7 +8,9 @@ from fpdf import FPDF
 # Requires Streamlit >= 1.40 (icon= on buttons and Material icons in markdown)
 
 # -------------------- Configuration --------------------
-API_BASE_URL = os.getenv("TRIPWEAVER_API_URL", "http://127.0.0.1:8000")
+API_BASE_URL = os.getenv(
+    "TRIPWEAVER_API_URL", "https://tripweaver-backend-vain.onrender.com"
+)
 PLAN_URL = f"{API_BASE_URL.rstrip('/')}/api/v1/plan-trip"
 AIRPORTS_URL = f"{API_BASE_URL.rstrip('/')}/api/v1/airports"
 FALLBACK_AIRPORTS = ["Islamabad (ISB)", "Dubai (DXB)"]
