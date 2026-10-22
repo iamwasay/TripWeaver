@@ -38,4 +38,4 @@ respx>=0.22.0
 streamlit>=1.41.0
 
 #---- PDF generation (Step 14) ----
-uv pip install fpdf2
+fpdf2
