@@ -3,7 +3,10 @@ from app.utils.logger import logger
 
 
 async def run_verification_agent(
-    request: TripRequest, budget_result: AgentResult
+    request: TripRequest,
+    budget_result: AgentResult,
+    flight_result: AgentResult,
+    stay_result: AgentResult,
 ) -> AgentResult:
     logger.info("Verification Agent running...")
 
@@ -11,20 +14,24 @@ async def run_verification_agent(
     status = "success"
 
     try:
+        # 1. Check Budget
         budget = budget_result.data
         if not budget:
-            raise ValueError("No budget data provided to verification.")
-
-        # Check 1: Over budget?
-        if budget["over_budget_amount"] > 0:
+            issues.append("Budget calculation failed.")
+        elif budget.get("over_budget_amount", 0) > 0:
             issues.append(
-                f"Over budget by {budget['over_budget_amount']} {request.budget_currency}."
+                f"Over budget by {budget['over_budget_amount']:,.2f} {request.budget_currency}."
             )
 
-        # Check 2: Are flights missing?
-        # (This would be connected to the actual AgentResults in a full implementation)
+        # 2. Check Missing Flights
+        if not flight_result.data or flight_result.status == "error":
+            issues.append("No valid flights were found for this route.")
 
-        # Determine overall status
+        # 3. Check Missing Hotels
+        if not stay_result.data or stay_result.status == "error":
+            issues.append("No valid hotels were found for these dates.")
+
+        # 4. Determine overall status
         if len(issues) > 0:
             validation_status = "FAIL"
             status = "warning"

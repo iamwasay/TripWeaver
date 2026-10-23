@@ -23,7 +23,7 @@ async def get_flights(
             "departure_id": origin,
             "arrival_id": destination,
             "outbound_date": depart_date,
-            "return_date": return_date,  # Added return date
+            "return_date": return_date,
             "type": "1",  # 1 = Round trip
             "currency": "USD",
             "adults": adults,
@@ -33,26 +33,41 @@ async def get_flights(
         data = await fetch_json(url, params=params)
 
         flights = []
-        for flight_group in data.get("best_flights", [])[:3]:
-            first_leg = flight_group["flights"][0]
-            last_leg = flight_group["flights"][-1]
+        for flight_group in data.get("best_flights", [])[:5]:  # Look at top 5
+            try:
+                price = float(flight_group.get("price", 0.0))
+                # FIX: Skip flights with missing or zero prices
+                if price <= 0:
+                    continue
 
-            flights.append(
-                {
-                    "airline": first_leg["airline"],
-                    "departure_time": first_leg["departure_airport"]["time"],
-                    "arrival_time": last_leg["arrival_airport"]["time"],
-                    "duration_minutes": flight_group.get("total_duration", 0),
-                    "stops": len(flight_group["flights"]) - 1,
-                    "price": float(flight_group["price"]),
-                    "currency": "USD",
-                    "source": "Google Flights (SerpApi)",
-                    "retrieved_at": datetime.utcnow().isoformat(),
-                }
-            )
+                first_leg = flight_group["flights"][0]
+                last_leg = flight_group["flights"][-1]
+
+                # Extract baggage if available
+                baggage = "Not provided"
+                if "extensions" in first_leg and "baggage" in first_leg["extensions"]:
+                    baggage = first_leg["extensions"]["baggage"]
+
+                flights.append(
+                    {
+                        "airline": first_leg["airline"],
+                        "departure_time": first_leg["departure_airport"]["time"],
+                        "arrival_time": last_leg["arrival_airport"]["time"],
+                        "duration_minutes": flight_group.get("total_duration", 0),
+                        "stops": len(flight_group["flights"]) - 1,
+                        "price": price,
+                        "currency": "USD",
+                        "source": "Google Flights (SerpApi)",
+                        "retrieved_at": datetime.utcnow().isoformat(),
+                        "baggage": baggage,
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Skipping malformed flight data: {e}")
+                continue
 
         if not flights:
-            logger.warning("No real flights found. Using mock.")
+            logger.warning("No valid real flights found. Using mock.")
             return _get_mock_flights(origin, destination, adults, depart_date)
 
         return flights
@@ -75,5 +90,6 @@ def _get_mock_flights(
             "currency": "USD",
             "source": "Mock Data",
             "retrieved_at": datetime.utcnow().isoformat(),
+            "baggage": "30kg included",
         }
     ]

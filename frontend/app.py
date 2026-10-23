@@ -3,7 +3,7 @@ import html
 import streamlit as st
 from datetime import date, timedelta
 from pdf_report import generate_pdf
-from backend_client import fetch_airports, post_plan
+from backend_client import fetch_airports, post_plan, BackendError
 
 # -------------------- Configuration --------------------
 API_BASE_URL = os.getenv(
@@ -345,14 +345,31 @@ def stay_card(s, is_best):
 
 
 def day_card(day):
-    acts = (
-        "".join(
-            f'<div class="timeline-activity"><div class="t">{icon("pin", 16, "#D97706")} {html.escape(a.get("name", "Activity"))}</div>'
-            f'<div class="m">{html.escape(a.get("category", "General"))} · {a.get("estimated_duration_hours")} hours</div></div>'
-            for a in day.get("activities", [])
+    def get_act_html(a):
+        name = html.escape(a.get("name", "Activity"))
+        cat = html.escape(a.get("category", "General"))
+        hours = a.get("estimated_duration_hours")
+        is_est = a.get("is_estimated", True)
+
+        if is_est:
+            badge = '<span style="color:#D97706;font-weight:600;">(Est. Cost)</span>'
+        else:
+            badge = (
+                '<span style="color:#059669;font-weight:600;">(Verified Cost)</span>'
+            )
+
+        return (
+            f'<div class="timeline-activity">'
+            f'<div class="t">{icon("pin", 16, "#D97706")} {name}</div>'
+            f'<div class="m">{cat} · {hours} hours · {badge}</div>'
+            f"</div>"
         )
+
+    acts = (
+        "".join(get_act_html(a) for a in day.get("activities", []))
         or '<div class="timeline-activity free">Free time / Travel day</div>'
     )
+
     return (
         f'<div class="day-card"><div class="day-head"><span class="day-num">Day {day.get("day_number")}</span>'
         f'<span class="day-date">{icon("calendar", 14, "#059669")} {html.escape(str(day.get("date")))}</span></div>{acts}</div>'
@@ -428,6 +445,10 @@ def render_search():
         st.error("Return date must be after the departure date.")
         return
 
+    # Clear old results before a new search
+    ss["result"] = None
+    ss["req"] = {}
+
     payload = {
         "origin": iata(origin_sel),
         "destination": iata(dest_sel),
@@ -454,9 +475,18 @@ def render_search():
         try:
             data = post_plan(PLAN_URL, payload)
             status.update(label="Your plan is ready", state="complete", expanded=False)
+        except BackendError as e:
+            status.update(label="Something went wrong", state="error")
+            if e.is_retryable:
+                st.warning(f"⚠️ {str(e)}")
+                # Retry button triggers a full page reload
+                if st.button("🔄 Try again", key="retry_btn"):
+                    st.rerun()
+            else:
+                st.error(f"❌ {str(e)}")
         except Exception as e:
             status.update(label="Something went wrong", state="error")
-            st.error(f"API error: {e}")
+            st.error(f"Unexpected error: {str(e)}")
 
     if data:
         ss["result"] = data

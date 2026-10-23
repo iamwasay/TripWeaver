@@ -1,7 +1,14 @@
 import asyncio
 from typing import TypedDict, Literal
 from langgraph.graph import StateGraph, END
-from app.models.schemas import TripRequest, TripState, AgentResult
+from app.models.schemas import (
+    TripRequest,
+    TripState,
+    AgentResult,
+    FlightOption,
+    StayOption,
+    ActivityOption,
+)
 from app.utils.logger import logger
 
 # Import all our agents
@@ -35,9 +42,7 @@ async def input_node(graph_state: GraphState):
 
 
 async def search_node(graph_state: GraphState):
-    logger.info(
-        f"Node: Search Agents (Attempt {graph_state.get('retry_count', 0) + 1})"
-    )
+    logger.info("Node: Search Agents")
     req = graph_state["request"]
 
     flight_res, stay_res, act_res, weather_res = await asyncio.gather(
@@ -46,59 +51,135 @@ async def search_node(graph_state: GraphState):
         run_activities_agent(req),
         run_weather_agent(req),
     )
-    graph_state["state"].weather = weather_res.data
-    return {"flight_res": flight_res, "stay_res": stay_res, "act_res": act_res}
+
+    if flight_res.data:
+        flight_res.data = sorted(
+            flight_res.data, key=lambda x: float(x.get("price", 0))
+        )
+    if stay_res.data:
+        stay_res.data = sorted(
+            stay_res.data, key=lambda x: float(x.get("total_stay_cost", 0))
+        )
+
+    # Create a deep copy to force LangGraph to save the state
+    new_state = graph_state["state"].model_copy(deep=True)
+
+    new_state.search_results = {
+        "flights": flight_res.data or [],
+        "stays": stay_res.data or [],
+        "activities": act_res.data or [],
+    }
+
+    if act_res.data:
+        new_state.activities = [ActivityOption(**a) for a in act_res.data]
+
+    new_state.weather = weather_res.data
+
+    new_messages = list(new_state.agent_messages)
+    new_messages.extend([flight_res, stay_res, act_res, weather_res])
+    new_state.agent_messages = new_messages
+
+    return {
+        "flight_res": flight_res,
+        "stay_res": stay_res,
+        "act_res": act_res,
+        "state": new_state,
+    }
 
 
 async def budget_node(graph_state: GraphState):
-    logger.info("Node: Budget Calculation")
+    logger.info(
+        f"Node: Budget Calculation (Attempt {graph_state.get('retry_count', 0) + 1})"
+    )
     req = graph_state["request"]
 
     f_res = graph_state["flight_res"]
     s_res = graph_state["stay_res"]
     retries = graph_state.get("retry_count", 0)
 
-    # FIX: Sort flights and hotels by price ascending before attempting revision
+    selected_flight_dict = None
+    selected_stay_dict = None
+
     if f_res.data:
-        f_res.data = sorted(f_res.data, key=lambda x: float(x.get("price", 0)))
+        f_idx = min(retries, len(f_res.data) - 1)
+        selected_flight_dict = f_res.data[f_idx]
+
     if s_res.data:
-        s_res.data = sorted(
-            s_res.data, key=lambda x: float(x.get("total_stay_cost", 0))
-        )
+        s_idx = min(retries, len(s_res.data) - 1)
+        selected_stay_dict = s_res.data[s_idx]
 
-    # REVISION LOOP: If retry_count > 0, swap to the next cheapest option
-    if retries > 0 and len(f_res.data) > retries:
-        logger.warning(f"Revision Loop: Swapping to flight option index {retries}")
-        f_res.data = [f_res.data[retries]]  # Keep only the next cheapest
+    temp_f_res = AgentResult(
+        agent_name="FlightAgent",
+        status=f_res.status,
+        data=[selected_flight_dict] if selected_flight_dict else [],
+    )
+    temp_s_res = AgentResult(
+        agent_name="StayAgent",
+        status=s_res.status,
+        data=[selected_stay_dict] if selected_stay_dict else [],
+    )
 
-    if retries > 0 and len(s_res.data) > retries:
-        logger.warning(f"Revision Loop: Swapping to hotel option index {retries}")
-        s_res.data = [s_res.data[retries]]
+    budget_res = await run_budget_agent(
+        req, temp_f_res, temp_s_res, graph_state["act_res"]
+    )
 
-    budget_res = await run_budget_agent(req, f_res, s_res, graph_state["act_res"])
-    return {"budget_res": budget_res}
+    # Create a deep copy to force LangGraph to save the state
+    new_state = graph_state["state"].model_copy(deep=True)
+
+    if selected_flight_dict:
+        new_state.selected_flight = FlightOption(**selected_flight_dict)
+    if selected_stay_dict:
+        new_state.selected_stay = StayOption(**selected_stay_dict)
+
+    new_messages = list(new_state.agent_messages)
+    new_messages.append(budget_res)
+    new_state.agent_messages = new_messages
+
+    return {"budget_res": budget_res, "state": new_state}
 
 
 async def verify_node(graph_state: GraphState):
     logger.info("Node: Verification")
     req = graph_state["request"]
-    val_res = await run_verification_agent(req, graph_state["budget_res"])
-    graph_state["state"].validation = val_res.data
-    graph_state["state"].budget = graph_state["budget_res"].data
-    return {"state": graph_state["state"]}
+    val_res = await run_verification_agent(
+        req,
+        graph_state["budget_res"],
+        graph_state["flight_res"],
+        graph_state["stay_res"],
+    )
+
+    # Create a deep copy to force LangGraph to save the state
+    new_state = graph_state["state"].model_copy(deep=True)
+    new_state.validation = val_res.data
+    new_state.budget = graph_state["budget_res"].data
+
+    new_messages = list(new_state.agent_messages)
+    new_messages.append(val_res)
+    new_state.agent_messages = new_messages
+
+    return {"state": new_state}
 
 
 def route_after_verification(graph_state: GraphState) -> Literal["revise", "itinerary"]:
-    # If FAIL and we haven't tried 3 times, loop back to revise!
-    if (
-        graph_state["state"].validation["status"] == "FAIL"
-        and graph_state.get("retry_count", 0) < 2
-    ):
+    if graph_state["state"].validation["status"] != "FAIL":
+        return "itinerary"
+
+    if graph_state.get("retry_count", 0) >= 2:
+        logger.warning("Max retries reached. Stopping revision loop.")
+        return "itinerary"
+
+    f_len = len(graph_state["flight_res"].data) if graph_state["flight_res"].data else 0
+    s_len = len(graph_state["stay_res"].data) if graph_state["stay_res"].data else 0
+    max_options = max(f_len, s_len)
+
+    if graph_state.get("retry_count", 0) + 1 >= max_options:
         logger.warning(
-            "Verification FAILED. Routing back to Search for cheaper options."
+            "No more cheaper alternatives available. Stopping revision loop."
         )
-        return "revise"
-    return "itinerary"
+        return "itinerary"
+
+    logger.warning("Verification FAILED. Routing back to Budget for cheaper options.")
+    return "revise"
 
 
 async def revise_node(graph_state: GraphState):
@@ -108,9 +189,22 @@ async def revise_node(graph_state: GraphState):
 async def itinerary_node(graph_state: GraphState):
     logger.info("Node: Itinerary Generation")
     req = graph_state["request"]
-    itin_res = await run_itinerary_agent(req, graph_state["act_res"])
-    graph_state["state"].itinerary = itin_res.data
-    return {"state": graph_state["state"]}
+    itin_res = await run_itinerary_agent(
+        req,
+        graph_state["act_res"],
+        graph_state["flight_res"],
+        AgentResult(agent_name="Validation", data=graph_state["state"].validation),
+    )
+
+    # Create a deep copy to force LangGraph to save the state
+    new_state = graph_state["state"].model_copy(deep=True)
+    new_state.itinerary = itin_res.data
+
+    new_messages = list(new_state.agent_messages)
+    new_messages.append(itin_res)
+    new_state.agent_messages = new_messages
+
+    return {"state": new_state}
 
 
 async def final_node(graph_state: GraphState):
@@ -122,8 +216,15 @@ async def final_node(graph_state: GraphState):
         AgentResult(agent_name="Itinerary", data=graph_state["state"].itinerary),
         AgentResult(agent_name="Validation", data=graph_state["state"].validation),
     )
-    graph_state["state"].agent_messages.append(final_res)
-    return {"state": graph_state["state"]}
+
+    # Create a deep copy to force LangGraph to save the state
+    new_state = graph_state["state"].model_copy(deep=True)
+
+    new_messages = list(new_state.agent_messages)
+    new_messages.append(final_res)
+    new_state.agent_messages = new_messages
+
+    return {"state": new_state}
 
 
 # --- BUILD THE LANGGRAPH ---
@@ -142,11 +243,10 @@ workflow.add_edge("input", "search")
 workflow.add_edge("search", "budget")
 workflow.add_edge("budget", "verify")
 
-# Conditional edge for revision loop
 workflow.add_conditional_edges(
     "verify", route_after_verification, {"revise": "revise", "itinerary": "itinerary"}
 )
-workflow.add_edge("revise", "budget")  # Loop back to budget with new (cheaper) options
+workflow.add_edge("revise", "budget")
 workflow.add_edge("itinerary", "final")
 workflow.add_edge("final", END)
 
@@ -162,5 +262,5 @@ async def orchestrate_trip(request: TripRequest) -> TripState:
     }
     logger.info("=== LANGGRAPH ORCHESTRATOR STARTED ===")
     final_output = await app_graph.ainvoke(initial_state)
-    logger.info("=== LANGGRAPH ORCHESTRATOR COMPLETE ===")
+    logger.info("=== LANGGRAPH ORCHESTRATOR COMPLETED ===")
     return final_output["state"]
