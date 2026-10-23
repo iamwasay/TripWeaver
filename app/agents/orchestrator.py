@@ -61,7 +61,6 @@ async def search_node(graph_state: GraphState):
             stay_res.data, key=lambda x: float(x.get("total_stay_cost", 0))
         )
 
-    # Create a deep copy to force LangGraph to save the state
     new_state = graph_state["state"].model_copy(deep=True)
 
     new_state.search_results = {
@@ -123,7 +122,6 @@ async def budget_node(graph_state: GraphState):
         req, temp_f_res, temp_s_res, graph_state["act_res"]
     )
 
-    # Create a deep copy to force LangGraph to save the state
     new_state = graph_state["state"].model_copy(deep=True)
 
     if selected_flight_dict:
@@ -139,16 +137,17 @@ async def budget_node(graph_state: GraphState):
 
 
 async def verify_node(graph_state: GraphState):
-    logger.info("Node: Verification")
+    """First verification: checks budget, flights, hotels BEFORE itinerary generation."""
+    logger.info("Node: Verification (Pre-Itinerary)")
     req = graph_state["request"]
     val_res = await run_verification_agent(
         req,
         graph_state["budget_res"],
         graph_state["flight_res"],
         graph_state["stay_res"],
+        # itinerary_result is None here — itinerary doesn't exist yet
     )
 
-    # Create a deep copy to force LangGraph to save the state
     new_state = graph_state["state"].model_copy(deep=True)
     new_state.validation = val_res.data
     new_state.budget = graph_state["budget_res"].data
@@ -160,7 +159,62 @@ async def verify_node(graph_state: GraphState):
     return {"state": new_state}
 
 
+async def post_verify_node(graph_state: GraphState):
+    """
+    FIX for Issue 15: Second verification AFTER itinerary generation.
+    This re-runs all checks with the itinerary available, so it can validate:
+    - Itinerary covers the requested dates
+    - Activities don't conflict with flight times
+    - Daily schedules are feasible
+    """
+    logger.info("Node: Post-Itinerary Verification")
+    req = graph_state["request"]
+
+    # Wrap the itinerary data as an AgentResult so the verifier can inspect it
+    itin_res = AgentResult(
+        agent_name="Itinerary", data=graph_state["state"].itinerary, status="success"
+    )
+
+    val_res = await run_verification_agent(
+        req,
+        graph_state["budget_res"],
+        graph_state["flight_res"],
+        graph_state["stay_res"],
+        itin_res,  # Pass itinerary for feasibility checks
+    )
+
+    new_state = graph_state["state"].model_copy(deep=True)
+    new_state.validation = val_res.data  # Update with latest verification result
+
+    # Replace the old VerificationAgent message with the new one
+    # (so the final output reflects the post-itinerary check)
+    new_messages = []
+    for msg in new_state.agent_messages:
+        if msg.agent_name == "VerificationAgent":
+            new_messages.append(val_res)  # Replace with updated check
+        else:
+            new_messages.append(msg)
+
+    # If no previous verification was found, just append
+    if not any(m.agent_name == "VerificationAgent" for m in new_messages):
+        new_messages.append(val_res)
+
+    new_state.agent_messages = new_messages
+
+    return {"state": new_state}
+
+
 def route_after_verification(graph_state: GraphState) -> Literal["revise", "itinerary"]:
+    # If a core API failed (e.g., SerpApi is down), do NOT try to revise.
+    if (
+        graph_state["flight_res"].status == "error"
+        or graph_state["stay_res"].status == "error"
+    ):
+        logger.warning(
+            "Core API failure detected. Stopping revision loop to prevent misleading retries."
+        )
+        return "itinerary"
+
     if graph_state["state"].validation["status"] != "FAIL":
         return "itinerary"
 
@@ -196,7 +250,6 @@ async def itinerary_node(graph_state: GraphState):
         AgentResult(agent_name="Validation", data=graph_state["state"].validation),
     )
 
-    # Create a deep copy to force LangGraph to save the state
     new_state = graph_state["state"].model_copy(deep=True)
     new_state.itinerary = itin_res.data
 
@@ -215,9 +268,9 @@ async def final_node(graph_state: GraphState):
         graph_state["budget_res"],
         AgentResult(agent_name="Itinerary", data=graph_state["state"].itinerary),
         AgentResult(agent_name="Validation", data=graph_state["state"].validation),
+        graph_state["state"].agent_messages,  # Pass all agent messages
     )
 
-    # Create a deep copy to force LangGraph to save the state
     new_state = graph_state["state"].model_copy(deep=True)
 
     new_messages = list(new_state.agent_messages)
@@ -236,6 +289,7 @@ workflow.add_node("budget", budget_node)
 workflow.add_node("verify", verify_node)
 workflow.add_node("revise", revise_node)
 workflow.add_node("itinerary", itinerary_node)
+workflow.add_node("post_verify", post_verify_node)  # NEW NODE
 workflow.add_node("final", final_node)
 
 workflow.set_entry_point("input")
@@ -247,7 +301,8 @@ workflow.add_conditional_edges(
     "verify", route_after_verification, {"revise": "revise", "itinerary": "itinerary"}
 )
 workflow.add_edge("revise", "budget")
-workflow.add_edge("itinerary", "final")
+workflow.add_edge("itinerary", "post_verify")  # CHANGED: was "final"
+workflow.add_edge("post_verify", "final")  # NEW
 workflow.add_edge("final", END)
 
 app_graph = workflow.compile()

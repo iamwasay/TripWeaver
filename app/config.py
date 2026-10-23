@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.utils.logger import logger
 
 
 class Settings(BaseSettings):
@@ -24,13 +25,11 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
 
     # --- Flights & Hotels ---
-    # Amadeus is kept for legacy/future use, but SerpApi is our active provider
     amadeus_client_id: str = ""
     amadeus_client_secret: str = ""
     serpapi_api_key: str = ""
 
     # --- Places / Maps ---
-    # Geoapify is our active provider. OpenTripMap and Google are fallbacks/legacy.
     google_maps_api_key: str = ""
     opentripmap_api_key: str = ""
     geoapify_api_key: str = ""
@@ -53,4 +52,23 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """Cached so the .env is only parsed once per process."""
-    return Settings()
+    settings = Settings()
+
+    # --- Validation & Diagnostics ---
+    required_keys = {
+        "SERPAPI_API_KEY": settings.serpapi_api_key,
+        "GEOAPIFY_API_KEY": settings.geoapify_api_key,
+        "WEATHER_API_KEY": settings.weather_api_key,
+    }
+
+    missing = [k for k, v in required_keys.items() if not v]
+
+    if missing:
+        logger.warning(
+            f"⚠️ Missing API keys: {', '.join(missing)}. "
+            f"The app will run, but related agents will fall back to Mock Data."
+        )
+    else:
+        logger.info("✅ All required API keys are loaded.")
+
+    return settings
